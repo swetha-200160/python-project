@@ -1,0 +1,61 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "python-app"
+        TAG = "1.0"
+        NEXUS_REGISTRY = "127.0.0.1:8083"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    bat 'sonar-scanner'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('python-app') {
+                    bat 'docker build -t %IMAGE_NAME%:%TAG% .'
+                }
+            }
+        }
+
+        stage('Push to Nexus') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-docker-creds',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+                    dir('python-app') {
+                        bat """
+                        docker tag %IMAGE_NAME%:%TAG% %NEXUS_REGISTRY%/%IMAGE_NAME%:%TAG%
+                        echo %NEXUS_PASS% | docker login %NEXUS_REGISTRY% -u %NEXUS_USER% --password-stdin
+                        docker push %NEXUS_REGISTRY%/%IMAGE_NAME%:%TAG%
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                bat """
+                docker rm -f python-app-container || true
+                docker run -d --name python-app-container -p 5000:5000 %NEXUS_REGISTRY%/%IMAGE_NAME%:%TAG%
+                """
+            }
+        }
+    }
+}
